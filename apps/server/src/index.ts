@@ -1,11 +1,14 @@
 import express, { Request, Response, Application } from "express";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import { prisma } from "./lib/prisma";
 
 const app: Application = express();
 const port = 4000;
 const server = createServer(app);
 const io = new Server(server);
+
+void prisma;
 
 app.use(express.json());
 
@@ -52,7 +55,7 @@ app.post("/rooms", (req: Request, res: Response) => {
 io.on("connection", (socket) => {
   console.log("a user connected");
 });
-
+         
 server.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });
