@@ -8,8 +8,6 @@ const port = 4000;
 const server = createServer(app);
 const io = new Server(server);
 
-void prisma;
-
 app.use(express.json());
 
 // Root route with explicit Request and Response types
@@ -24,32 +22,80 @@ app.get("/health", (req: Request, res: Response) => {
   });
 });
 
-app.get("/rooms", (req: Request, res: Response) => {
-  res.json({
-    success: true,
-    rooms: ["room1", "room2"],
-  });
-});
+app.get("/rooms", async (req: Request, res: Response) => {
+  try {
+    const rooms = await prisma.room.findMany({
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
 
-app.post("/rooms", (req: Request, res: Response) => {
-  const { name, slug, language, code, isPrivate } = req.body;
+    res.json({
+      success: true,
+      rooms,
+    });
+  } catch (error) {
+    console.error("Failed to fetch rooms:", error);
 
-  if (!name || !slug || !language) {
-    return res.status(400).json({
+    res.status(500).json({
       success: false,
-      message: "Missing required fields",
+      message: "Failed to fetch rooms",
     });
   }
-  res.status(201).json({
-    success: true,
-    room: {
-      name,
-      slug,
-      language,
-      code,
-      isPrivate,
-    },
-  });
+});
+
+app.post("/rooms", async (req: Request, res: Response) => {
+  try {
+    const { name, slug, language, code, isPrivate, ownerId } = req.body;
+
+    const trimmedName = typeof name === "string" ? name.trim() : "";
+    const normalizedSlug = typeof slug === "string" ? slug.trim().toLowerCase() : "";
+    const normalizedLanguage =
+      typeof language === "string" ? language.trim().toLowerCase() : "";
+    const normalizedCode = typeof code === "string" ? code : "";
+
+    if (!trimmedName || !normalizedSlug || !normalizedLanguage || !ownerId) {
+      return res.status(400).json({
+        success: false,
+        message: "name, slug, language, and ownerId are required",
+      });
+    }
+
+    const room = await prisma.room.create({
+      data: {
+        name: trimmedName,
+        slug: normalizedSlug,
+        language: normalizedLanguage,
+        code: normalizedCode,
+        isPrivate: Boolean(isPrivate),
+        ownerId,
+      },
+    });
+
+    return res.status(201).json({
+      success: true,
+      room,
+    });
+  } catch (error) {
+    console.error("Failed to create room:", error);
+
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "P2002"
+    ) {
+      return res.status(409).json({
+        success: false,
+        message: "A room with this slug already exists",
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to create room",
+    });
+  }
 });
 
 io.on("connection", (socket) => {
