@@ -1,13 +1,20 @@
 import express, { Request, Response, Application } from "express";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import cors from "cors";
 import { prisma } from "./lib/prisma";
 
 const app: Application = express();
 const port = 4000;
 const server = createServer(app);
 const io = new Server(server);
+const corsOrigin = process.env.CORS_ORIGIN ?? "http://localhost:3000";
 
+app.use(
+  cors({
+    origin: corsOrigin,
+  }),
+);
 app.use(express.json());
 
 // Root route with explicit Request and Response types
@@ -40,6 +47,46 @@ app.get("/rooms", async (req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch rooms",
+    });
+  }
+});
+
+app.get("/rooms/:slug", async (req: Request, res: Response) => {
+  try {
+    const slugParam = req.params.slug;
+    const rawSlug = Array.isArray(slugParam) ? slugParam[0] : slugParam;
+    const normalizedSlug = typeof rawSlug === "string" ? rawSlug.trim().toLowerCase() : "";
+
+    if (!normalizedSlug) {
+      return res.status(400).json({
+        success: false,
+        message: "Room slug is required",
+      });
+    }
+
+    const room = await prisma.room.findUnique({
+      where: {
+        slug: normalizedSlug,
+      },
+    });
+
+    if (!room) {
+      return res.status(404).json({
+        success: false,
+        message: "Room not found",
+      });
+    }
+
+    return res.json({
+      success: true,
+      room,
+    });
+  } catch (error) {
+    console.error("Failed to fetch room by slug:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch room",
     });
   }
 });
