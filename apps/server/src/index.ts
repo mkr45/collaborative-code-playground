@@ -29,6 +29,11 @@ app.get("/health", (req: Request, res: Response) => {
   });
 });
 
+function getNormalizedSlug(slugParam: string | string[] | undefined) {
+  const rawSlug = Array.isArray(slugParam) ? slugParam[0] : slugParam;
+  return typeof rawSlug === "string" ? rawSlug.trim().toLowerCase() : "";
+}
+
 app.get("/rooms", async (req: Request, res: Response) => {
   try {
     const rooms = await prisma.room.findMany({
@@ -53,9 +58,7 @@ app.get("/rooms", async (req: Request, res: Response) => {
 
 app.get("/rooms/:slug", async (req: Request, res: Response) => {
   try {
-    const slugParam = req.params.slug;
-    const rawSlug = Array.isArray(slugParam) ? slugParam[0] : slugParam;
-    const normalizedSlug = typeof rawSlug === "string" ? rawSlug.trim().toLowerCase() : "";
+    const normalizedSlug = getNormalizedSlug(req.params.slug);
 
     if (!normalizedSlug) {
       return res.status(400).json({
@@ -87,6 +90,110 @@ app.get("/rooms/:slug", async (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       message: "Failed to fetch room",
+    });
+  }
+});
+
+app.patch("/rooms/:slug", async (req: Request, res: Response) => {
+  try {
+    const normalizedSlug = getNormalizedSlug(req.params.slug);
+
+    if (!normalizedSlug) {
+      return res.status(400).json({
+        success: false,
+        message: "Room slug is required",
+      });
+    }
+
+    const { name, language, code, isPrivate } = req.body;
+    const updateData: {
+      name?: string;
+      language?: string;
+      code?: string;
+      isPrivate?: boolean;
+    } = {};
+
+    if (name !== undefined) {
+      if (typeof name !== "string" || !name.trim()) {
+        return res.status(400).json({
+          success: false,
+          message: "name must be a non-empty string",
+        });
+      }
+
+      updateData.name = name.trim();
+    }
+
+    if (language !== undefined) {
+      if (typeof language !== "string" || !language.trim()) {
+        return res.status(400).json({
+          success: false,
+          message: "language must be a non-empty string",
+        });
+      }
+
+      updateData.language = language.trim().toLowerCase();
+    }
+
+    if (code !== undefined) {
+      if (typeof code !== "string") {
+        return res.status(400).json({
+          success: false,
+          message: "code must be a string",
+        });
+      }
+
+      updateData.code = code;
+    }
+
+    if (isPrivate !== undefined) {
+      if (typeof isPrivate !== "boolean") {
+        return res.status(400).json({
+          success: false,
+          message: "isPrivate must be a boolean",
+        });
+      }
+
+      updateData.isPrivate = isPrivate;
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Provide at least one field to update",
+      });
+    }
+
+    const existingRoom = await prisma.room.findUnique({
+      where: {
+        slug: normalizedSlug,
+      },
+    });
+
+    if (!existingRoom) {
+      return res.status(404).json({
+        success: false,
+        message: "Room not found",
+      });
+    }
+
+    const room = await prisma.room.update({
+      where: {
+        slug: normalizedSlug,
+      },
+      data: updateData,
+    });
+
+    return res.json({
+      success: true,
+      room,
+    });
+  } catch (error) {
+    console.error("Failed to update room:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update room",
     });
   }
 });
