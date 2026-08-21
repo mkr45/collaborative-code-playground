@@ -198,6 +198,51 @@ app.patch("/rooms/:slug", async (req: Request, res: Response) => {
   }
 });
 
+app.delete("/rooms/:slug", async (req: Request, res: Response) => {
+  try {
+    const normalizedSlug = getNormalizedSlug(req.params.slug);
+
+    if (!normalizedSlug) {
+      return res.status(400).json({
+        success: false,
+        message: "Room slug is required",
+      });
+    }
+
+    const existingRoom = await prisma.room.findUnique({
+      where: {
+        slug: normalizedSlug,
+      },
+    });
+
+    if (!existingRoom) {
+      return res.status(404).json({
+        success: false,
+        message: "Room not found",
+      });
+    }
+
+    const room = await prisma.room.delete({
+      where: {
+        slug: normalizedSlug,
+      },
+    });
+
+    return res.json({
+      success: true,
+      message: "Room deleted successfully",
+      room,
+    });
+  } catch (error) {
+    console.error("Failed to delete room:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to delete room",
+    });
+  }
+});
+
 app.post("/rooms", async (req: Request, res: Response) => {
   try {
     const { name, slug, language, code, isPrivate, ownerId } = req.body;
