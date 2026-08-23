@@ -60,6 +60,26 @@ type ValidationResult<T> =
       message: string;
     };
 
+function sendSuccessResponse(
+  res: Response,
+  statusCode: number,
+  message: string,
+  payload: Record<string, unknown> = {},
+) {
+  return res.status(statusCode).json({
+    success: true,
+    message,
+    ...payload,
+  });
+}
+
+function sendErrorResponse(res: Response, statusCode: number, message: string) {
+  return res.status(statusCode).json({
+    success: false,
+    message,
+  });
+}
+
 function validateCreateRoomBody(body: unknown): ValidationResult<RoomCreateData> {
   if (typeof body !== "object" || body === null) {
     return {
@@ -211,17 +231,13 @@ app.get("/rooms", async (req: Request, res: Response) => {
       },
     });
 
-    res.json({
-      success: true,
+    return sendSuccessResponse(res, 200, "Rooms fetched successfully", {
       rooms,
     });
   } catch (error) {
     console.error("Failed to fetch rooms:", error);
 
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch rooms",
-    });
+    return sendErrorResponse(res, 500, "Failed to fetch rooms");
   }
 });
 
@@ -230,10 +246,7 @@ app.get("/rooms/:slug", async (req: Request, res: Response) => {
     const normalizedSlug = getNormalizedSlug(req.params.slug);
 
     if (!normalizedSlug) {
-      return res.status(400).json({
-        success: false,
-        message: "Room slug is required",
-      });
+      return sendErrorResponse(res, 400, "Room slug is required");
     }
 
     const room = await prisma.room.findUnique({
@@ -243,23 +256,16 @@ app.get("/rooms/:slug", async (req: Request, res: Response) => {
     });
 
     if (!room) {
-      return res.status(404).json({
-        success: false,
-        message: "Room not found",
-      });
+      return sendErrorResponse(res, 404, "Room not found");
     }
 
-    return res.json({
-      success: true,
+    return sendSuccessResponse(res, 200, "Room fetched successfully", {
       room,
     });
   } catch (error) {
     console.error("Failed to fetch room by slug:", error);
 
-    return res.status(500).json({
-      success: false,
-      message: "Failed to fetch room",
-    });
+    return sendErrorResponse(res, 500, "Failed to fetch room");
   }
 });
 
@@ -268,19 +274,13 @@ app.patch("/rooms/:slug", async (req: Request, res: Response) => {
     const normalizedSlug = getNormalizedSlug(req.params.slug);
 
     if (!normalizedSlug) {
-      return res.status(400).json({
-        success: false,
-        message: "Room slug is required",
-      });
+      return sendErrorResponse(res, 400, "Room slug is required");
     }
 
     const validationResult = validateUpdateRoomBody(req.body);
 
     if (!validationResult.success) {
-      return res.status(400).json({
-        success: false,
-        message: validationResult.message,
-      });
+      return sendErrorResponse(res, 400, validationResult.message);
     }
 
     const existingRoom = await prisma.room.findUnique({
@@ -290,10 +290,7 @@ app.patch("/rooms/:slug", async (req: Request, res: Response) => {
     });
 
     if (!existingRoom) {
-      return res.status(404).json({
-        success: false,
-        message: "Room not found",
-      });
+      return sendErrorResponse(res, 404, "Room not found");
     }
 
     const room = await prisma.room.update({
@@ -303,17 +300,13 @@ app.patch("/rooms/:slug", async (req: Request, res: Response) => {
       data: validationResult.data,
     });
 
-    return res.json({
-      success: true,
+    return sendSuccessResponse(res, 200, "Room updated successfully", {
       room,
     });
   } catch (error) {
     console.error("Failed to update room:", error);
 
-    return res.status(500).json({
-      success: false,
-      message: "Failed to update room",
-    });
+    return sendErrorResponse(res, 500, "Failed to update room");
   }
 });
 
@@ -322,10 +315,7 @@ app.delete("/rooms/:slug", async (req: Request, res: Response) => {
     const normalizedSlug = getNormalizedSlug(req.params.slug);
 
     if (!normalizedSlug) {
-      return res.status(400).json({
-        success: false,
-        message: "Room slug is required",
-      });
+      return sendErrorResponse(res, 400, "Room slug is required");
     }
 
     const existingRoom = await prisma.room.findUnique({
@@ -335,10 +325,7 @@ app.delete("/rooms/:slug", async (req: Request, res: Response) => {
     });
 
     if (!existingRoom) {
-      return res.status(404).json({
-        success: false,
-        message: "Room not found",
-      });
+      return sendErrorResponse(res, 404, "Room not found");
     }
 
     const room = await prisma.room.delete({
@@ -347,18 +334,13 @@ app.delete("/rooms/:slug", async (req: Request, res: Response) => {
       },
     });
 
-    return res.json({
-      success: true,
-      message: "Room deleted successfully",
+    return sendSuccessResponse(res, 200, "Room deleted successfully", {
       room,
     });
   } catch (error) {
     console.error("Failed to delete room:", error);
 
-    return res.status(500).json({
-      success: false,
-      message: "Failed to delete room",
-    });
+    return sendErrorResponse(res, 500, "Failed to delete room");
   }
 });
 
@@ -367,18 +349,14 @@ app.post("/rooms", async (req: Request, res: Response) => {
     const validationResult = validateCreateRoomBody(req.body);
 
     if (!validationResult.success) {
-      return res.status(400).json({
-        success: false,
-        message: validationResult.message,
-      });
+      return sendErrorResponse(res, 400, validationResult.message);
     }
 
     const room = await prisma.room.create({
       data: validationResult.data,
     });
 
-    return res.status(201).json({
-      success: true,
+    return sendSuccessResponse(res, 201, "Room created successfully", {
       room,
     });
   } catch (error) {
@@ -390,16 +368,10 @@ app.post("/rooms", async (req: Request, res: Response) => {
       "code" in error &&
       error.code === "P2002"
     ) {
-      return res.status(409).json({
-        success: false,
-        message: "A room with this slug already exists",
-      });
+      return sendErrorResponse(res, 409, "A room with this slug already exists");
     }
 
-    return res.status(500).json({
-      success: false,
-      message: "Failed to create room",
-    });
+    return sendErrorResponse(res, 500, "Failed to create room");
   }
 });
 
