@@ -1,4 +1,11 @@
-import express, { Request, Response, Application } from "express";
+import express, {
+  Request,
+  Response,
+  Application,
+  NextFunction,
+  RequestHandler,
+  ErrorRequestHandler,
+} from "express";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import cors from "cors";
@@ -60,6 +67,22 @@ type ValidationResult<T> =
       message: string;
     };
 
+class AppError extends Error {
+  statusCode: number;
+
+  constructor(message: string, statusCode: number) {
+    super(message);
+    this.name = "AppError";
+    this.statusCode = statusCode;
+  }
+}
+
+function asyncHandler(handler: RequestHandler): RequestHandler {
+  return (req, res, next) => {
+    Promise.resolve(handler(req, res, next)).catch(next);
+  };
+}
+
 function sendSuccessResponse(
   res: Response,
   statusCode: number,
@@ -78,6 +101,15 @@ function sendErrorResponse(res: Response, statusCode: number, message: string) {
     success: false,
     message,
   });
+}
+
+function isPrismaUniqueConstraintError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "P2002"
+  );
 }
 
 function validateCreateRoomBody(body: unknown): ValidationResult<RoomCreateData> {
@@ -223,8 +255,9 @@ function validateUpdateRoomBody(body: unknown): ValidationResult<RoomUpdateData>
   };
 }
 
-app.get("/rooms", async (req: Request, res: Response) => {
-  try {
+app.get(
+  "/rooms",
+  asyncHandler(async (req: Request, res: Response) => {
     const rooms = await prisma.room.findMany({
       orderBy: {
         createdAt: "desc",
@@ -234,19 +267,16 @@ app.get("/rooms", async (req: Request, res: Response) => {
     return sendSuccessResponse(res, 200, "Rooms fetched successfully", {
       rooms,
     });
-  } catch (error) {
-    console.error("Failed to fetch rooms:", error);
+  }),
+);
 
-    return sendErrorResponse(res, 500, "Failed to fetch rooms");
-  }
-});
-
-app.get("/rooms/:slug", async (req: Request, res: Response) => {
-  try {
+app.get(
+  "/rooms/:slug",
+  asyncHandler(async (req: Request, res: Response) => {
     const normalizedSlug = getNormalizedSlug(req.params.slug);
 
     if (!normalizedSlug) {
-      return sendErrorResponse(res, 400, "Room slug is required");
+      throw new AppError("Room slug is required", 400);
     }
 
     const room = await prisma.room.findUnique({
@@ -256,31 +286,28 @@ app.get("/rooms/:slug", async (req: Request, res: Response) => {
     });
 
     if (!room) {
-      return sendErrorResponse(res, 404, "Room not found");
+      throw new AppError("Room not found", 404);
     }
 
     return sendSuccessResponse(res, 200, "Room fetched successfully", {
       room,
     });
-  } catch (error) {
-    console.error("Failed to fetch room by slug:", error);
+  }),
+);
 
-    return sendErrorResponse(res, 500, "Failed to fetch room");
-  }
-});
-
-app.patch("/rooms/:slug", async (req: Request, res: Response) => {
-  try {
+app.patch(
+  "/rooms/:slug",
+  asyncHandler(async (req: Request, res: Response) => {
     const normalizedSlug = getNormalizedSlug(req.params.slug);
 
     if (!normalizedSlug) {
-      return sendErrorResponse(res, 400, "Room slug is required");
+      throw new AppError("Room slug is required", 400);
     }
 
     const validationResult = validateUpdateRoomBody(req.body);
 
     if (!validationResult.success) {
-      return sendErrorResponse(res, 400, validationResult.message);
+      throw new AppError(validationResult.message, 400);
     }
 
     const existingRoom = await prisma.room.findUnique({
@@ -290,7 +317,7 @@ app.patch("/rooms/:slug", async (req: Request, res: Response) => {
     });
 
     if (!existingRoom) {
-      return sendErrorResponse(res, 404, "Room not found");
+      throw new AppError("Room not found", 404);
     }
 
     const room = await prisma.room.update({
@@ -303,19 +330,16 @@ app.patch("/rooms/:slug", async (req: Request, res: Response) => {
     return sendSuccessResponse(res, 200, "Room updated successfully", {
       room,
     });
-  } catch (error) {
-    console.error("Failed to update room:", error);
+  }),
+);
 
-    return sendErrorResponse(res, 500, "Failed to update room");
-  }
-});
-
-app.delete("/rooms/:slug", async (req: Request, res: Response) => {
-  try {
+app.delete(
+  "/rooms/:slug",
+  asyncHandler(async (req: Request, res: Response) => {
     const normalizedSlug = getNormalizedSlug(req.params.slug);
 
     if (!normalizedSlug) {
-      return sendErrorResponse(res, 400, "Room slug is required");
+      throw new AppError("Room slug is required", 400);
     }
 
     const existingRoom = await prisma.room.findUnique({
@@ -325,7 +349,7 @@ app.delete("/rooms/:slug", async (req: Request, res: Response) => {
     });
 
     if (!existingRoom) {
-      return sendErrorResponse(res, 404, "Room not found");
+      throw new AppError("Room not found", 404);
     }
 
     const room = await prisma.room.delete({
@@ -337,43 +361,55 @@ app.delete("/rooms/:slug", async (req: Request, res: Response) => {
     return sendSuccessResponse(res, 200, "Room deleted successfully", {
       room,
     });
-  } catch (error) {
-    console.error("Failed to delete room:", error);
+  }),
+);
 
-    return sendErrorResponse(res, 500, "Failed to delete room");
-  }
-});
-
-app.post("/rooms", async (req: Request, res: Response) => {
-  try {
+app.post(
+  "/rooms",
+  asyncHandler(async (req: Request, res: Response) => {
     const validationResult = validateCreateRoomBody(req.body);
 
     if (!validationResult.success) {
-      return sendErrorResponse(res, 400, validationResult.message);
+      throw new AppError(validationResult.message, 400);
     }
 
-    const room = await prisma.room.create({
-      data: validationResult.data,
-    });
+    try {
+      const room = await prisma.room.create({
+        data: validationResult.data,
+      });
 
-    return sendSuccessResponse(res, 201, "Room created successfully", {
-      room,
-    });
-  } catch (error) {
-    console.error("Failed to create room:", error);
+      return sendSuccessResponse(res, 201, "Room created successfully", {
+        room,
+      });
+    } catch (error) {
+      if (isPrismaUniqueConstraintError(error)) {
+        throw new AppError("A room with this slug already exists", 409);
+      }
 
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      error.code === "P2002"
-    ) {
-      return sendErrorResponse(res, 409, "A room with this slug already exists");
+      throw error;
     }
+  }),
+);
 
-    return sendErrorResponse(res, 500, "Failed to create room");
+const errorHandler: ErrorRequestHandler = (
+  error: unknown,
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  if (res.headersSent) {
+    return next(error);
   }
-});
+
+  if (error instanceof AppError) {
+    return sendErrorResponse(res, error.statusCode, error.message);
+  }
+
+  console.error(`Unhandled error on ${req.method} ${req.originalUrl}:`, error);
+  return sendErrorResponse(res, 500, "Internal server error");
+};
+
+app.use(errorHandler);
 
 io.on("connection", (socket) => {
   console.log("a user connected");
