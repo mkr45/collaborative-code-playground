@@ -6,9 +6,13 @@ import express, {
   RequestHandler,
   ErrorRequestHandler,
 } from "express";
+import "dotenv/config";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import cors from "cors";
+import session from "express-session";
+import passport from "passport";
+import { Strategy as GitHubStrategy, type Profile } from "passport-github2";
 import { prisma } from "./lib/prisma";
 
 const app: Application = express();
@@ -16,13 +20,90 @@ const port = 4000;
 const server = createServer(app);
 const io = new Server(server);
 const corsOrigin = process.env.CORS_ORIGIN ?? "http://localhost:3000";
+const sessionSecret = process.env.SESSION_SECRET ?? "dev-session-secret";
+const githubClientId = process.env.GITHUB_CLIENT_ID;
+const githubClientSecret = process.env.GITHUB_CLIENT_SECRET;
+const githubCallbackUrl =
+  process.env.GITHUB_CALLBACK_URL ?? "http://localhost:4000/auth/github/callback";
+const authSuccessRedirect = process.env.AUTH_SUCCESS_REDIRECT ?? corsOrigin;
+const authFailureRedirect = process.env.AUTH_FAILURE_REDIRECT;
+
+type AuthenticatedGitHubUser = {
+  id: string;
+  username: string;
+  displayName: string;
+  avatarUrl: string | null;
+};
+
+declare global {
+  namespace Express {
+    interface User extends AuthenticatedGitHubUser {}
+  }
+}
+
+function getAuthenticatedGitHubUser(profile: Profile): AuthenticatedGitHubUser {
+  const avatarUrl =
+    Array.isArray(profile.photos) && profile.photos.length > 0
+      ? profile.photos[0]?.value ?? null
+      : null;
+
+  return {
+    id: profile.id,
+    username: profile.username ?? "",
+    displayName: profile.displayName ?? profile.username ?? "GitHub user",
+    avatarUrl,
+  };
+}
+
+passport.serializeUser((user, done) => {
+  done(null, user);
+});
+
+passport.deserializeUser((user, done) => {
+  done(null, user as Express.User);
+});
+
+if (githubClientId && githubClientSecret) {
+  passport.use(
+    new GitHubStrategy(
+      {
+        clientID: githubClientId,
+        clientSecret: githubClientSecret,
+        callbackURL: githubCallbackUrl,
+      },
+      (
+        _accessToken: string,
+        _refreshToken: string,
+        profile: Profile,
+        done: (error: unknown, user?: Express.User) => void,
+      ) => {
+        return done(null, getAuthenticatedGitHubUser(profile));
+      },
+    ),
+  );
+}
 
 app.use(
   cors({
     origin: corsOrigin,
+    credentials: true,
   }),
 );
 app.use(express.json());
+app.use(
+  session({
+    secret: sessionSecret,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+    },
+  }),
+);
+app.use(passport.initialize());
+app.use(passport.session());
 
 // Root route with explicit Request and Response types
 app.get("/", (req: Request, res: Response) => {
@@ -35,6 +116,63 @@ app.get("/health", (req: Request, res: Response) => {
     message: "Server is running",
   });
 });
+
+app.get("/auth/github", (req: Request, res: Response, next: NextFunction) => {
+  if (!githubClientId || !githubClientSecret) {
+    return sendErrorResponse(
+      res,
+      500,
+      "GitHub OAuth is not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET.",
+    );
+  }
+
+  return passport.authenticate("github", { scope: ["user:email"] })(
+    req,
+    res,
+    next,
+  );
+});
+
+app.get(
+  "/auth/github/callback",
+  (req: Request, res: Response, next: NextFunction) => {
+    if (!githubClientId || !githubClientSecret) {
+      return sendErrorResponse(
+        res,
+        500,
+        "GitHub OAuth is not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET.",
+      );
+    }
+
+    return passport.authenticate("github", (error: unknown, user?: Express.User | false) => {
+      if (error) {
+        return next(error);
+      }
+
+      if (!user) {
+        if (authFailureRedirect) {
+          return res.redirect(authFailureRedirect);
+        }
+
+        return sendErrorResponse(res, 401, "GitHub login failed");
+      }
+
+      return req.logIn(user, (loginError) => {
+        if (loginError) {
+          return next(loginError);
+        }
+
+        if (authSuccessRedirect) {
+          return res.redirect(authSuccessRedirect);
+        }
+
+        return sendSuccessResponse(res, 200, "GitHub login successful", {
+          user,
+        });
+      });
+    })(req, res, next);
+  },
+);
 
 function getNormalizedSlug(slugParam: string | string[] | undefined) {
   const rawSlug = Array.isArray(slugParam) ? slugParam[0] : slugParam;
