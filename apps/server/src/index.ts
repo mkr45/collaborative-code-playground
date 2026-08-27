@@ -13,6 +13,7 @@ import cors from "cors";
 import session from "express-session";
 import passport from "passport";
 import { Strategy as GitHubStrategy, type Profile } from "passport-github2";
+import type { User as DatabaseUser } from "../generated/prisma/client";
 import { prisma } from "./lib/prisma";
 
 const app: Application = express();
@@ -28,39 +29,75 @@ const githubCallbackUrl =
 const authSuccessRedirect = process.env.AUTH_SUCCESS_REDIRECT ?? corsOrigin;
 const authFailureRedirect = process.env.AUTH_FAILURE_REDIRECT;
 
-type AuthenticatedGitHubUser = {
-  id: string;
-  username: string;
-  displayName: string;
-  avatarUrl: string | null;
-};
-
 declare global {
   namespace Express {
-    interface User extends AuthenticatedGitHubUser {}
+    interface User extends DatabaseUser {}
   }
 }
 
-function getAuthenticatedGitHubUser(profile: Profile): AuthenticatedGitHubUser {
+function getGitHubProfileData(profile: Profile) {
+  const githubId = Number(profile.id);
+
+  if (!Number.isSafeInteger(githubId)) {
+    throw new Error("GitHub profile id is invalid");
+  }
+
+  const username = profile.username?.trim();
+
+  if (!username) {
+    throw new Error("GitHub profile username is missing");
+  }
+
   const avatarUrl =
     Array.isArray(profile.photos) && profile.photos.length > 0
       ? profile.photos[0]?.value ?? null
       : null;
+  const email =
+    Array.isArray(profile.emails) && profile.emails.length > 0
+      ? profile.emails[0]?.value ?? null
+      : null;
 
   return {
-    id: profile.id,
-    username: profile.username ?? "",
-    displayName: profile.displayName ?? profile.username ?? "GitHub user",
-    avatarUrl,
+    githubId,
+    username,
+    email,
+    avatar: avatarUrl,
   };
 }
 
+async function findOrCreateGitHubUser(profile: Profile): Promise<DatabaseUser> {
+  const profileData = getGitHubProfileData(profile);
+
+  return prisma.user.upsert({
+    where: {
+      githubId: profileData.githubId,
+    },
+    update: {
+      username: profileData.username,
+      email: profileData.email,
+      avatar: profileData.avatar,
+    },
+    create: profileData,
+  });
+}
+
 passport.serializeUser((user, done) => {
-  done(null, user);
+  done(null, user.id);
 });
 
-passport.deserializeUser((user, done) => {
-  done(null, user as Express.User);
+passport.deserializeUser((userId: string, done) => {
+  prisma.user
+    .findUnique({
+      where: {
+        id: userId,
+      },
+    })
+    .then((user) => {
+      done(null, user ?? false);
+    })
+    .catch((error: unknown) => {
+      done(error);
+    });
 });
 
 if (githubClientId && githubClientSecret) {
@@ -71,13 +108,18 @@ if (githubClientId && githubClientSecret) {
         clientSecret: githubClientSecret,
         callbackURL: githubCallbackUrl,
       },
-      (
+      async (
         _accessToken: string,
         _refreshToken: string,
         profile: Profile,
         done: (error: unknown, user?: Express.User) => void,
       ) => {
-        return done(null, getAuthenticatedGitHubUser(profile));
+        try {
+          const user = await findOrCreateGitHubUser(profile);
+          return done(null, user);
+        } catch (error) {
+          return done(error);
+        }
       },
     ),
   );
@@ -173,6 +215,33 @@ app.get(
     })(req, res, next);
   },
 );
+
+app.get("/auth/me", (req: Request, res: Response) => {
+  if (!req.isAuthenticated() || !req.user) {
+    return sendErrorResponse(res, 401, "Not authenticated");
+  }
+
+  return sendSuccessResponse(res, 200, "Authenticated user fetched successfully", {
+    user: req.user,
+  });
+});
+
+app.post("/auth/logout", (req: Request, res: Response, next: NextFunction) => {
+  req.logout((logoutError) => {
+    if (logoutError) {
+      return next(logoutError);
+    }
+
+    req.session.destroy((sessionError) => {
+      if (sessionError) {
+        return next(sessionError);
+      }
+
+      res.clearCookie("connect.sid");
+      return sendSuccessResponse(res, 200, "Logged out successfully");
+    });
+  });
+});
 
 function getNormalizedSlug(slugParam: string | string[] | undefined) {
   const rawSlug = Array.isArray(slugParam) ? slugParam[0] : slugParam;
